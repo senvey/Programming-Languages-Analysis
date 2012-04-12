@@ -1,85 +1,14 @@
 # coding=utf-8
 
 '''
-Created on Apr 6, 2012
+Created on Apr 7, 2012
 
 @author: William
+
+Support for combination of terms as the lambda function body.
 '''
 
 import sys
-
-class LambdaFunc():
-    
-    def __init__(self, var):
-        self.var = var
-    
-    def __expr__(self):
-        return '(λ%s.%s)' % (self.var, \
-                    self.func if self._is_func else self.expr)
-    
-    def __str__(self):
-        return '(λ%s.%s)' % (self.var, \
-                    self.func if self._is_func else self.expr)
-    
-    def set_var(self, var):
-        self.var = var
-    
-    def set_func(self, func):
-        self.func = func
-        self._is_func = True
-    
-    def set_expr(self, expr):
-        self.expr = expr
-        self._is_func = False
-    
-    def is_func(self):
-        return self._is_func
-    
-    def get_var(self):
-        return self.var
-    
-    def get_func(self):
-        return self.func
-    
-    def get_expr(self):
-        return self.expr
-    
-    def get_inner(self):
-        if self._is_func:
-            return self.func
-        return self.expr
-    
-    def apply(self, argv):
-#        print '=== Applying...', func, 'to', argv
-        if argv is None:
-            raise ValueError('*** Application: argv should not be None.')
-        # remove unnecessary parentheses
-        argv = remove_par(argv) if len(remove_par(argv)) == 1 else argv
-        
-        inner_func = self
-        while inner_func.is_func():
-            inner_func = inner_func.get_func()
-            if inner_func.get_var() == self.var:
-                return self.get_func() if self.is_func() else parse(self.get_expr())
-        
-#        print '=== Application [before]:', self.get_inner()
-        # remove parentheses before application and add them back if necessary
-        # this will avoid redundant parentheses during application
-        applied = add_par(
-                          remove_par(inner_func.get_expr()) \
-                            .replace(self.var, argv)
-                        )
-#        print '=== Application [cascade]:', applied
-        applied = parse(applied)
-        
-        try:
-            func = parse_func(remove_par(applied))
-        except:
-            inner_func.set_expr(applied)
-        else:
-            inner_func.set_func(func)
-#        print '=== Application [after]:', self.get_inner()
-        return self.get_inner()
 
 def has_par(s):
     if not s.startswith('('):
@@ -106,6 +35,79 @@ def remove_par(s):
     while has_par(s):
         s = s[1:-1]
     return s
+
+class LambdaFunc():
+    
+    def __init__(self, var):
+        self.var = var
+    
+    def __expr__(self):
+        return '(λ%s.%s)' % (self.var, self.get_domain())
+    
+    def __str__(self):
+        return '(λ%s.%s)' % (self.var, self.get_domain())
+    
+    def set_var(self, var):
+        self.var = var
+    
+    def set_domain(self, domain):
+        self.domain = domain
+    
+    def add_term(self, term):
+        if 'domain' not in dir(self):
+            self.domain = []
+        self.domain.append(term)
+    
+    def get_var(self):
+        return self.var
+    
+    def get_domain(self):
+        _domain = ''.join(map(str, self.domain))
+        return _domain if len(_domain) == 1 else add_par(_domain)
+    
+    def apply(self, argv, var=None):
+        if var is None:
+            var = self.var
+        if argv is None:
+            raise ValueError('*** Application: argv should not be None.')
+        # remove unnecessary parentheses
+        argv = remove_par(argv) if len(remove_par(argv)) == 1 else argv
+#        print '=== Applying... [%s := %s] to %s' % (var, argv, self)
+        
+#        print '=== Application [domain - before]:', self.get_domain()
+        for i in range(len(self.domain)):
+            term = self.domain[i]
+            
+#            print '=== Application [term - before]:', term
+            if not isinstance(term, LambdaFunc):
+                self.domain.remove(term)
+                # remove parentheses before application and add them back if necessary
+                # this will avoid redundant parentheses during application
+                applied = remove_par(term).replace(var, argv)
+                applied = applied if len(applied) == 1 else add_par(applied)
+                self.domain.insert(i, applied)
+            else:
+                # 1. do not apply it if sub-function has the same variable
+                # 2. as sub-function, term should not be replaced by its domain after
+                # application, but terms in its domain should be parsed cascade to
+                # functions if possible
+                if term.get_var() != var:
+                    term.apply(argv, var)
+                    term = parse_func(remove_par(str(term)))
+#                print '=== Application [term - after - function]:', term
+            
+#        print '=== Application [domain - after]:', self.get_domain()
+        
+        # process inner domain after application
+        parsed, terms = parse(self.get_domain(), list)
+        try:
+            func = parse_func(remove_par(parsed))
+        except:
+            self.domain = terms
+        else:
+            self.domain = [func]
+#        print '=== Application [after]:', self.get_domain()
+        return self.domain[0] if len(self.domain) == 1 else self.get_domain()
 
 def read_token(s, pos=0):
     '''
@@ -139,23 +141,41 @@ def parse_func(term):
     if isinstance(term, LambdaFunc):
         return term
     
-    if term[3] != '.':
+    term = term.replace(' ', '')
+    ptr = 3
+    if term[ptr] != '.':
         raise ValueError('*** Parse Function: Invalid token at position 3 in %s. "." is expected.' % term)
     if len(term) < 5:
         raise ValueError('*** Parse Function: No lambda term found.')
     
-    func = LambdaFunc(term[2])
+    ptr = 2
+    func = LambdaFunc(term[ptr])
     
-    if term[4:].startswith('λ'):
-        inner_func = parse_func(term[4:])
-        func.set_func(inner_func)
-    else:
-        expr = add_par(term[4:])
-        func.set_expr(expr)
+    ptr = 4
+    while ptr < len(term):
+        sub = term[ptr:]
+        offset = len(sub)
+        if sub.startswith('('):   # inner function with parentheses
+            sub, offset = read_token(sub)
+            # since they are in parentheses, they are meant to be evaluated as long as possible
+            sub = remove_par(parse(sub))
+        elif not sub.startswith('λ'):   # single-word term (starts with neither '(' nor 'λ')
+            sub, offset = sub[0], 1
+        
+        if sub.startswith('λ'):  # parse inner function
+            try:
+                inner_func = parse_func(sub)
+            except:
+                raise ValueError('Unexpected lambda function format: %s.' % sub)
+            func.add_term(inner_func)
+        else:   # simple term(s)
+            func.add_term(sub if offset == 1 else add_par(sub))
+        
+        ptr += offset
 
     return func
 
-def parse(term):
+def parse(term, out_type=str):
     '''
     Parameter "term" comes in with outer parentheses.
     '''
@@ -163,7 +183,10 @@ def parse(term):
     term = term.replace(' ', '')
     if len(term) < 2 or term.find('λ') == -1:
         # no need to further parse it
-        return remove_par(term) if len(remove_par(term)) == 1 else term
+        term = remove_par(term) if len(remove_par(term)) == 1 else term
+        if out_type == list:
+            return term, [term]
+        return term
     
     # parse term containing lambda function(s), which must be enclosed
     # by parentheses
@@ -176,14 +199,12 @@ def parse(term):
         if next_token is None:
             break
         
-        # DEFECT: should not always apply prior function to
-        # following terms but unless they are in parentheses
-        
-        # process next_token
 #        print 'Before parsing...', next_token
+        # process next_token
         if isinstance(func, LambdaFunc):
-#            print 'After applying...', func
+#            print 'Before applying...', func
             func = func.apply(next_token)
+#            print 'After applying...', func
         else:
             if not next_token.startswith('(λ'):
                 # Parse token only if it cannot be converted
@@ -195,7 +216,7 @@ def parse(term):
                 next_token = parse(next_token)
                 
             if next_token.startswith('(λ'):
-                if func is not None:
+                if func is not None:    # but it isn't function either
                     buf.append(func)
                 
                 # parse lambda function
@@ -213,166 +234,98 @@ def parse(term):
     
     parsed = add_par(''.join(map(str, buf)))
     if parsed == add_par(term):
+        if out_type == list:
+            return parsed, buf
         return parsed
-    
-    next_parsed = parse(parsed)
+
+    next_parsed, next_buf = parse(parsed, list)
     while next_parsed != parsed:
-        parsed = next_parsed
-        next_parsed = parse(parsed)
+        parsed, buf = next_parsed, next_buf
+        next_parsed, next_buf = parse(parsed, list)
+    if out_type == list:
+        return parsed, buf
     return parsed
-
-#def parse2(term):
-#    '''
-#    Parameter "term" comes in with outer parentheses.
-#    '''
-#    
-#    term = term.replace(' ', '')
-#    if len(term) < 2 or term.find('λ') == -1:
-#        # no need to further parse it
-#        # TODO: return remove_par(term)
-#        return term
-#    
-#    # parse term containing lambda function(s), which must be enclosed
-#    # by parentheses
-#    buf = []
-#    pos = 0
-#    func = None
-#    term = remove_par(term)
-#    while True:
-#        next_token, pos = read_token(term, pos)
-#        if next_token is None:
-#            break
-#        
-#        # NOTE: should not parse it before trying to convert it to
-#        # lambda function; it would otherwise muddle the sequence of
-#        # computation.
-##        next_token = parse(next_token)
-#        
-#        # process next_token
-##        print 'Before parsing...', next_token
-#        if isinstance(func, LambdaFunc):
-#            func = app(func, next_token)
-##            print 'After applying...', func
-#        elif next_token.startswith('(λ'):
-#            if func is not None:
-#                buf.append(func)
-#            
-#            # parse lambda function
-#            try:
-#                func = parse_func(remove_par(next_token))
-##                print 'Parsed function...', func
-#            except:
-#                sys.exit(sys.exc_info()[1])
-#        else:
-#            # NOTE: parse(next_token) might result in a lambda function;
-#            # therefore, updated to new version
-#            buf.append(parse(next_token))
-#
-#    if func is not None:
-#        buf.append(func)
-#    
-#    return add_par(''.join(map(str, buf)))
-
-#def parse3(term):
-#    '''
-#    Parameter "term" comes in with outer parentheses.
-#    '''
-#    
-#    term = term.replace(' ', '')
-#    if len(term) < 2 or term.find('(λ') == -1:
-#        # no need to further parse it
-#        # TODO: return remove_par(term)
-#        return term
-#    
-#    # parse term containing lambda function(s), which must be enclosed
-#    # by parentheses
-#    buf = []
-#    term = remove_par(term)
-#    last_token, pos = read_token(term)  # last_token must not be None
-##    last_token = parse(last_token)
-#    while True:
-#        next_token, pos = read_token(term, pos)
-#        
-#        if next_token is None:
-#            buf.append(last_token)
-#            break
-#        
-#        next_token = parse3(next_token)
-#        
-#        # process last_token
-##        print 'Before parsing...', last_token
-#        if isinstance(last_token, LambdaFunc) or \
-#                last_token.startswith('(λ'):
-#            # parse lambda function
-#            if not isinstance(last_token, LambdaFunc):
-#                last_token = remove_par(last_token)
-#            try:
-#                func = parse_func(last_token)
-##                print 'Parsed function...', func
-#            except:
-#                sys.exit(sys.exc_info()[1])
-#                
-#            last_token = app(func, next_token)
-##            print 'After applying...', last_token
-#        else:
-#            buf.append(last_token)
-#            last_token = next_token
-#    
-#    return add_par(''.join(map(str, buf)))
 
 if __name__ == '__main__':
     
     # Tests
 #    print has_par('(()()((()())()))')
     
-#    func = parse_func('λx.λf.ax(b)yc')
-#    outer_func = LambdaFunc('y')
-#    outer_func.set_func(func)
-#    ret = app(app(outer_func, 'H'), 'HH')
-#    print ret
-#    
-#    outer_func = parse_func('λy.λx.λf.ax(b)yc')
-#    ret = app(app(outer_func, 'H'), 'HH')
-#    print ret
-    
 #    term = '(λy.λx.λf.ax(b)yc)abc'
 #    token, pos = read_token(term)
 #    print token, pos
 #    print read_token(term, pos)
+
+#    print parse_func('λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)')
     
-    print parse('λa.λb.λc.abc')
-    print parse('(λy.λx.λf.ax(b)yc)ABC')
-    print parse('(λy.λx.λf.ax(b)yc)A(BC)')
-    print parse('((λf.λx.(fx))f)x')
-    print parse('(λx.(y(λx.(zx))))(a)')
+#    func = parse_func('λp.λq.p p q')
+#    print func
+#    func = func.apply('(λx.λy.x)')
+#    print func
+#    func = func.apply('(λx.λy.y)')
+#    print func
+
+#    func = parse_func('λx.λf.ax(b)yc')
+#    outer_func = LambdaFunc('y')
+#    outer_func.add_term(func)
+#    print outer_func
+#    ret = outer_func.apply('H').apply('HH')
+#    print ret
     
-    print parse('(λn. λf. λx. (f (n f) x)) (λf. λx. (f x))')
-    print parse('(λn. λf. λx. (f (n f) x)) ((λn. λf. λx. (f (n f) x)) (λf. λx. (f x)))')
+#    print parse('λa.λb.λc.abc')
+#    print parse('(λy.λx.λf.ax(b)yc)ABC')
+#    print parse('(λy.λx.λf.ax(b)yc)A(BC)')
+#    print parse('((λf.λx.(fx))f)x')
+#    print parse('(λx.(y(λx.(zx))))(a)')
     
-    print 'PLUS 1 2 = 3:\t',
-    print parse('(λm.λn.λf.λx.m f (n f x)) (λf.λx.f x) (λf.λx.f (f x))')
-    print 'MULT 2 2 = 4:\t',
-    print parse('(λm.λn.λf.m (n f)) (λf.λx.f (f x)) (λf.λx.f (f x))')
-    print 'POW 2 3 = 8:\t',
-    print parse('(λb.λe.e b) (λf.λx.f (f x)) (λg.λf.g (g (g f)))')
-    print 'PRED 2 = 1:\t',
-    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.f (f x))')
-    print 'PRED 0 = 0:\t',
-    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.x)')
+#    print parse('(λn. λf. λx. (f (n f) x)) (λf. λx. (f x))')
+#    print parse('(λn. λf. λx. (f (n f) x)) ((λn. λf. λx. (f (n f) x)) (λf. λx. (f x)))')
     
-    print 'NOT TRUE:\t',
-    print parse('(λp.λa.λb.p b a) (λx.λy.x)')
-    print 'OR TURE FALSE:\t',
-    print parse('(λp.λq.p p q) (λx.λy.x) (λx.λy.y)')
-    print 'IF-THEN-ELSE TRUE M N:\t',
-    print parse('(λp.λa.λb.p a b) (λx.λy.x) M N')
-    print 'IF-THEN-ELSE FALSE M N:\t',
-    print parse('(λp.λa.λb.p a b) (λx.λy.y) M N')
+#    print 'PLUS 1 2 = 3:',
+#    print parse('(λm.λn.λf.λx.m f (n f x)) (λf.λx.f x) (λf.λx.f (f x))')
+#    print parse('(λm.λn.m (λn.λf.λx.f (n f x)) n) (λf.λy.f y) (λf.λx.f (f x))')    # (λf.λx.f x) will make it wrong
+#    print 'MULT 2 2 = 4:\t',
+#    print parse('(λm.λn.λf.m (n f)) (λf.λx.f (f x)) (λf.λx.f (f x))')
+#    print 'POW 2 3 = 8:\t',
+#    print parse('(λb.λe.e b) (λf.λx.f (f x)) (λg.λf.g (g (g f)))')
+#    print 'PRED 2 = 1:\t',
+#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.f (f x))')
+#    print 'PRED 0 = 0:\t',
+#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.x)')
     
-    print 'SUB 3 2 = 1:\t',
-    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
+#    print 'NOT TRUE:\t',
+#    print parse('(λp.λa.λb.p b a) (λx.λy.x)')
+#    print 'OR TURE FALSE:\t',
+#    print parse('(λp.λq.p p q) (λx.λy.x) (λx.λy.y)')
+#    print 'IF-THEN-ELSE TRUE M N:\t',
+#    print parse('(λp.λa.λb.p a b) (λx.λy.x) M N')
+#    print 'IF-THEN-ELSE FALSE M N:\t',
+#    print parse('(λp.λa.λb.p a b) (λx.λy.y) M N')
     
-#    print parse('((λa.λb.λc.abc) (λx.λy.x) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) N) ((λa.λb.λc.abc) (λx.λy.y) M (λf.λx.x))')
+    print parse('(λf.λy.f y) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λz.f z)')
+
+#    print 'SUB 3 2 = 1:\t',
+#    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
+#    print parse('j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λy.f (f (f y)))')
+#    print parse('(λj.(j(λf.(λx.(f(fx)))))) (λf.λz.f (f z))')
+#    print
+#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
+#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λy.f (f (f y)))')
+#    print
+#    print parse('(λf.λz.f (f z)) (PRED)')
+#    print parse('(λi.λj.j (PRED) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
+#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
+#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))(λf.(λy.(f(f(fy)))))')
+#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.z (λg.λh.h (g f)) (λu.x) (λu.u))')
+#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
+    
+
+#    print parse('(λf.λz.f (f z))      (λf.λx.(f(fx)))')
+#    print 'IF-THEN-ELSE TRUE (PRED (IF-THEN-ELSE FALSE M 2)) N = IF-THEN-ELSE TRUE (PRED 2) N = 1:\t',
+#    print parse('(λa.λb.λc.abc) (λx.λy.x) ((λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) ((λa.λb.λc.abc) (λx.λy.y) M (λf.λx.f (f x)))) N ')
+    
+#    print parse('(λp.dλa.λb.p a b) (λx.λy.y) M N')
+#    print parse('(λp.p (λx.λy.y)) M N')
     
 #    print parse(sys.argv[1])
 
