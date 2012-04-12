@@ -1,7 +1,7 @@
 # coding=utf-8
 
 '''
-Created on Apr 5, 2012
+Created on Apr 6, 2012
 
 @author: William
 '''
@@ -48,6 +48,38 @@ class LambdaFunc():
         if self._is_func:
             return self.func
         return self.expr
+    
+    def apply(self, argv):
+#        print '=== Applying...', func, 'to', argv
+        if argv is None:
+            raise ValueError('*** Application: argv should not be None.')
+        # remove unnecessary parentheses
+        argv = remove_par(argv) if len(remove_par(argv)) == 1 else argv
+        
+        inner_func = self
+        while inner_func.is_func():
+            inner_func = inner_func.get_func()
+            if inner_func.get_var() == self.var:
+                return self.get_func() if self.is_func() else parse(self.get_expr())
+        
+#        print '=== Application [before]:', self.get_inner()
+        # remove parentheses before application and add them back if necessary
+        # this will avoid redundant parentheses during application
+        applied = add_par(
+                          remove_par(inner_func.get_expr()) \
+                            .replace(self.var, argv)
+                        )
+#        print '=== Application [cascade]:', applied
+        applied = parse(applied)
+        
+        try:
+            func = parse_func(remove_par(applied))
+        except:
+            inner_func.set_expr(applied)
+        else:
+            inner_func.set_func(func)
+#        print '=== Application [after]:', self.get_inner()
+        return self.get_inner()
 
 def has_par(s):
     if not s.startswith('('):
@@ -123,28 +155,6 @@ def parse_func(term):
 
     return func
 
-def app(func, argv):
-#    print '=== Applying...', func, 'to', argv
-    if not isinstance(func, LambdaFunc):
-        raise ValueError('*** Application: Expecting func as an instance of LambdaFunc.')
-    if argv is None:
-        raise ValueError('*** Application: argv should not be None.')
-    # remove unnecessary parentheses
-    argv = remove_par(argv) if len(remove_par(argv)) == 1 else argv
-    
-    applying_func = func
-    var = applying_func.get_var()
-#    print '=== Application [before]:', applying_func.get_inner()
-    while func.is_func():
-        func = func.get_func()
-    # remove parentheses before application and add them back if necessary
-    # this will avoid redundant parentheses during application
-    applied = remove_par(func.get_expr()).replace(var, argv)
-    applied = parse(add_par(applied))
-    func.set_expr(applied)
-#    print '=== Application [after]:', applying_func.get_inner()
-    return applying_func.get_inner()
-
 def parse(term):
     '''
     Parameter "term" comes in with outer parentheses.
@@ -166,11 +176,14 @@ def parse(term):
         if next_token is None:
             break
         
+        # DEFECT: should not always apply prior function to
+        # following terms but unless they are in parentheses
+        
         # process next_token
 #        print 'Before parsing...', next_token
         if isinstance(func, LambdaFunc):
 #            print 'After applying...', func
-            func = app(func, next_token)
+            func = func.apply(next_token)
         else:
             if not next_token.startswith('(λ'):
                 # Parse token only if it cannot be converted
@@ -201,11 +214,11 @@ def parse(term):
     parsed = add_par(''.join(map(str, buf)))
     if parsed == add_par(term):
         return parsed
+    
     next_parsed = parse(parsed)
     while next_parsed != parsed:
         parsed = next_parsed
         next_parsed = parse(parsed)
-    
     return parsed
 
 #def parse2(term):
@@ -333,6 +346,9 @@ if __name__ == '__main__':
     print parse('((λf.λx.(fx))f)x')
     print parse('(λx.(y(λx.(zx))))(a)')
     
+    print parse('(λn. λf. λx. (f (n f) x)) (λf. λx. (f x))')
+    print parse('(λn. λf. λx. (f (n f) x)) ((λn. λf. λx. (f (n f) x)) (λf. λx. (f x)))')
+    
     print 'PLUS 1 2 = 3:\t',
     print parse('(λm.λn.λf.λx.m f (n f x)) (λf.λx.f x) (λf.λx.f (f x))')
     print 'MULT 2 2 = 4:\t',
@@ -343,18 +359,20 @@ if __name__ == '__main__':
     print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.f (f x))')
     print 'PRED 0 = 0:\t',
     print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.x)')
-    print parse('(λn. λf. λx. (f (n f) x)) (λf. λx. (f x))')
-    print parse('(λn. λf. λx. (f (n f) x)) ((λn. λf. λx. (f (n f) x)) (λf. λx. (f x)))')
     
     print 'NOT TRUE:\t',
     print parse('(λp.λa.λb.p b a) (λx.λy.x)')
     print 'OR TURE FALSE:\t',
-    print parse('(λp.λq.p p q) (λx.λy.x) (λa.λb.b)')
+    print parse('(λp.λq.p p q) (λx.λy.x) (λx.λy.y)')
     print 'IF-THEN-ELSE TRUE M N:\t',
     print parse('(λp.λa.λb.p a b) (λx.λy.x) M N')
     print 'IF-THEN-ELSE FALSE M N:\t',
     print parse('(λp.λa.λb.p a b) (λx.λy.y) M N')
-    print parse('(λa.λb.λc.abc) (λx.λy.x) M N (λa.λb.λc.abc) (λx.λy.y) M N')
+    
+    print 'SUB 3 2 = 1:\t',
+    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
+    
+#    print parse('((λa.λb.λc.abc) (λx.λy.x) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) N) ((λa.λb.λc.abc) (λx.λy.y) M (λf.λx.x))')
     
 #    print parse(sys.argv[1])
 
