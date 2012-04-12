@@ -1,14 +1,28 @@
-# coding=utf-8
+# coding=UTF-8
 
 '''
 Created on Apr 7, 2012
 
 @author: William
 
-Support for combination of terms as the lambda function body.
+V4. Support for combination of terms as the lambda function body.
+V5. Support for factorial.
+
+ISSUE: (λm.λn.mn) n l --> (λn.nn) l --> ll
 '''
 
 import sys
+
+MAX_DEPTH = 100
+
+Y = '(λg.(λx.g (x x)) (λx.g (x x)))'
+#G = '(λf.λn.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) n) (λf.λx.f x) ((MULT) n (f ((SUB) n (λf.λz.f z)))))'
+
+# n --> N does matter
+#G = '(λF.λn.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) n) (λf.λx.f x) ((λm.λn.λf.m (n f)) n (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) n (λf.λz.f z)))))'
+#print parse('(λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((λm.λn.λf.m (n f)) N (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) N (λf.λz.f z))))) (λf.(λz.f z))')
+
+G = '(λF.λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((λm.λn.λf.m (n f)) N (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) N (λf.λz.f z)))))'
 
 def has_par(s):
     if not s.startswith('('):
@@ -65,39 +79,49 @@ class LambdaFunc():
         _domain = ''.join(map(str, self.domain))
         return _domain if len(_domain) == 1 else add_par(_domain)
     
-    def deeper_apply(self, var, argv, term):
+    def deeper_apply(self, var, argv, term, depth=1):
         # 1. remove parentheses before application and add them back if necessary
         # this will avoid redundant parentheses during application
         # 2. parse it before applying since the term may containing combination of
         # variables and functions
         # 3. keep domain as one dimension array
-        parsed, terms = parse(term, list)
+        
+        if depth == MAX_DEPTH:
+            return term
+        
+        parsed, terms = parse(term, depth + 1, list)
         
         for i in range(len(terms)):
             term = terms[i]
             
             if not isinstance(term, LambdaFunc):
                 terms.remove(term)
-                if len(parse(term, list)[1]) == 1: # simple term
+                if len(parse(term, depth + 1, list)[1]) == 1: # simple term
                     applied = remove_par(term).replace(var, argv)
                 else:   # need further decompose
-                    applied = self.deeper_apply(var, argv, term)
+                    applied = self.deeper_apply(var, argv, term, depth + 1)
                 # this cost me two days on complex sub!!!
                 applied = applied if len(applied) == 1 else add_par(applied)
                 terms.insert(i, applied)
-            elif term.get_var() != var: # lambda function
-                term.apply(argv, var)
+            elif term.get_var() != var:
+                # lambda function
+                # apply beta reduction only if they are bound to different variables
+                term.apply(argv, var, depth + 1)
                 term = parse_func(remove_par(str(term)))
         return ''.join(map(str, terms))
     
-    def apply(self, argv, var=None):
+    def apply(self, argv, var=None, depth=1):
+        
+        if depth == MAX_DEPTH:
+            return self.domain[0] if len(self.domain) == 1 else self.get_domain()
+        
         if var is None:
             var = self.var
         if argv is None:
             raise ValueError('*** Application: argv should not be None.')
         # remove unnecessary parentheses
         argv = remove_par(argv) if len(remove_par(argv)) == 1 else argv
-#        print '=== Applying... [%s := %s] to %s' % (var, argv, self)
+#        print '*** Applying... [%s := %s] to %s' % (var, argv, self)
         
 #        print '=== Application [domain - before]:', self.get_domain()
         for i in range(len(self.domain)):
@@ -106,7 +130,7 @@ class LambdaFunc():
 #            print '=== Application [term - before]:', term
             if not isinstance(term, LambdaFunc):
                 self.domain.remove(term)
-                applied = self.deeper_apply(var, argv, term)
+                applied = self.deeper_apply(var, argv, term, depth + 1)
                 # after two days on complex sub, add this in case!!!
                 applied = applied if len(applied) == 1 else add_par(applied)
                 self.domain.insert(i, applied)
@@ -117,14 +141,14 @@ class LambdaFunc():
                 # application, but terms in its domain should be parsed cascade to
                 # functions if possible
                 if term.get_var() != var:
-                    term.apply(argv, var)
+                    term.apply(argv, var, depth + 1)
                     term = parse_func(remove_par(str(term)))
 #                print '=== Application [term - after - function]:', term
             
 #        print '=== Application [domain - after]:', self.get_domain()
         
         # process inner domain after application
-        parsed, terms = parse(self.get_domain(), list)
+        parsed, terms = parse(self.get_domain(), depth + 1, list)
         try:
             func = parse_func(remove_par(parsed))
         except:
@@ -158,7 +182,7 @@ def read_token(s, pos=0):
     right += 1
     return s[pos : right], right
 
-def parse_func(term):
+def parse_func(term, first=False):
     # for example, term = 'λx.λf.a(b)c', where a(b)c are all together
     # with or without enclosing parentheses; or term is an instance of LambdaFunc
     # NOTE: 'λ' takes up two bytes
@@ -181,11 +205,11 @@ def parse_func(term):
         sub = term[ptr:]
         offset = len(sub)
         if sub.startswith('('):
-            # inner function with parentheses -- keep it together and do not parse it right now
-            # (parse terms before applying)
+            # inner function with parentheses:
+            # parse it only if the input argument term is the first one in one expresion;
+            # otherwise keep it together and do not parse it right now (i.e. do not parse terms before applying)
             sub, offset = read_token(sub)
             # since they are in parentheses, they are meant to be evaluated as long as possible
-            sub = remove_par(sub)
             sub = remove_par(parse(sub) if first else sub)
         elif not sub.startswith('λ'):   # single-word term (starts with neither '(' nor 'λ')
             sub, offset = sub[0], 1
@@ -203,11 +227,17 @@ def parse_func(term):
 
     return func
 
-def parse(term, out_type=str):
+def parse(term, depth=1, out_type=str, main=False):
     '''
     # TODO: remove this setting
     Parameter "term" comes in with outer parentheses.
     '''
+    
+#    print 'Parse depth [%d] beginning:' % depth, term
+    if depth == MAX_DEPTH:
+        if out_type == list:
+            return term, [term]
+        return term
     
     term = term.replace(' ', '')
     if len(term) < 2 or term.find('λ') == -1:
@@ -220,19 +250,17 @@ def parse(term, out_type=str):
     # parse term containing lambda function(s), which must be enclosed
     # by parentheses
     term = remove_par(term)
-#    print term
     # TODO: update this after removing parentheses setting
     if term.startswith('λ'):
         term = add_par(term)
     first_token, pos = read_token(term)
-#    print first_token
     if not first_token.startswith('(λ'):
         # e.g., ((λx.λy.x (λe.e)) (λf.λx.f x)) -- uncommon as first term
-        first_token = parse(first_token)
+        first_token = parse(first_token, depth + 1)
     func = None
     if first_token.startswith('(λ'):
         try:
-            func = parse_func(remove_par(first_token))
+            func = parse_func(remove_par(first_token), True)
         except:
             sys.exit(sys.exc_info()[1])
         buf = []
@@ -242,21 +270,18 @@ def parse(term, out_type=str):
     while True:
         # keep parentheses on next_token so it will be processed together
         next_token, pos = read_token(term, pos)
-#        print next_token
         if next_token is None:
             if func is not None:
                 buf.append(func)
             break
 #        print 'Before parsing...', next_token
         
-        # process next_token
+        # if next_token is enclosed by parentheses, it should be parsed first
         if not next_token.startswith('(λ'):
-            next_token = parse(next_token)
+            next_token = parse(next_token, depth + 1)
         
         if func is not None:
-#            print 'Before applying...', func
-            func = func.apply(next_token)
-#            print 'After applying...', func
+            func = func.apply(next_token, depth=depth+1)
             
             if not isinstance(func, LambdaFunc):
                 # func is not a function any longer
@@ -269,50 +294,46 @@ def parse(term, out_type=str):
                     next_token = parse_func(remove_par(next_token))
                 except:
                     sys.exit(sys.exc_info()[1])
-            buf.append(next_token)
-    
-    parsed = add_par(''.join(map(str, buf)))
-    if parsed == add_par(term):
-        if out_type == list:
-            return parsed, buf
-        return parsed
+                else:
+                    buf.append(next_token)
+            else:
+                buf.append(next_token)
 
-    next_parsed, next_buf = parse(parsed, list)
-    while next_parsed != parsed:
-        parsed, buf = next_parsed, next_buf
-        next_parsed, next_buf = parse(parsed, list)
+    global Y
+    global G
+    parsed = add_par(''.join(map(str, buf)))
+    # if it is not parsing the main input expression, do not expend (YG)
+    # since the parent expression might be able to be further parsed;
+    # otherwise it may result in infinite loop
+    if main and parsed.find('(YG)') != -1:
+        parsed = parsed.replace('(YG)', G + '(YG)', 1)
+        parsed = parse(parsed, depth + 1, main='main')
     if out_type == list:
         return parsed, buf
     return parsed
 
 if __name__ == '__main__':
     
-    # Tests
-#    print has_par('(()()((()())()))')
+#    # ISZERO ZERO
+#    print parse('(λn.n (λx.λi.λj.j) (λi.λj.i)) (λf.λz.z)')
+#    # IF-THEN-ELSE (ISZERO ZERO) ONE TWO
+#    print parse('(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) (λf.λz.z)) (λf.λx.f x) (λf.λx.f (f x))')
+#    # (λN.(IF-THEN-ELSE (ISZERO N) ONE (XXX)) ONE 
+#    print parse('(λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) (XXX)) (λf.λz.(f z))')
     
-#    term = '(λa.λb.λc.abc)'
-#    token, pos = read_token(term)
-#    print token, pos
-#    term = '(λy.λx.λf.ax(b)yc)abc'
-#    token, pos = read_token(term)
-#    print token, pos
-#    print read_token(term, pos)
-#
-#    print parse_func('λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)')
-#    
-#    func = parse_func('λp.λq.p p q')
-#    print func
-#    func = func.apply('(λx.λy.x)')
-#    print func
-#    func = func.apply('(λx.λy.y)')
-#    print func
-#
-#    func = parse_func('λx.λf.ax(b)yc')
-#    outer_func = LambdaFunc('y')
-#    outer_func.add_term(func)
-#    print outer_func
-#    ret = outer_func.apply('H').apply('HH')
-#    print ret
+#    print parse('(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) (λf.(λz.z))) (λf.λx.f x) ((MULT) N ((XX) ((SUB) N (λf.λz.f z))))')
+#    print parse('(λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((MULT) N ((YG) ((SUB) N (λf.λz.f z))))) (λf.(λz.z))')
+#    print parse('(λF.λn.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) n) (λf.λx.f x) ((λm.λn.λf.m (n f)) n (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) n (λf.λz.f z))))) (YG) (λf.(λz.z))')
+
+#    print parse('(λF.λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((λm.λn.λf.m (n f)) N (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) N (λf.λz.f z))))) (YG) (λf.(λz.f z))', 1, main=True)
+#    # MULT ONE ((λN.(IF-THEN-ELSE (ISZEROR N) ONE (SUB N ONE))) ONE)
+#    print parse('(λm.λn.λf.m (n f)) (λf.(λz.f z)) ((λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((λm.λn.λf.m (n f)) N (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) N (λf.λz.f z))))) (λf.(λz.f z)))')
+#    # (λN.(IF-THEN-ELSE (ISZEROR N) ONE (SUB N ONE)))
+#    print parse('(λN.(λp.λa.λb.p a b) ((λn.n (λx.λi.λj.j) (λi.λj.i)) N) (λf.λx.f x) ((λm.λn.λf.m (n f)) N (F ((λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) N (λf.λz.f z))))) (λf.(λz.f z))')
+    
+#    print parse('(λf.(λz.((((YG) ((λi.λj.j(λn.λf.λx.n(λg.λh.h(gf))(λu.x)(λu.u))i) (λe.(λz.ez)) (λe.λz.ez)) )f)z)))')
+    
+####################################################### TEST #######################################################
     
     print parse('(λa.λb.λc.abc)')   # (λa.(λb.(λc.(abc))))
     print parse('(λy.λx.λf.ax(b)yc)ABC')
@@ -333,6 +354,8 @@ if __name__ == '__main__':
     print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.f (f x))')
     print 'PRED 0 = 0:\t',
     print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.x)')
+    print 'SUB 3 2 = 1:\t',
+    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
     
     print 'NOT TRUE:\t',
     print parse('(λp.λa.λb.p b a) (λx.λy.x)')
@@ -343,91 +366,26 @@ if __name__ == '__main__':
     print 'IF-THEN-ELSE FALSE M N:\t',
     print parse('(λp.λa.λb.p a b) (λx.λy.y) M N')
     
-####################################################### TEST #######################################################
-#    print parse('(λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u))')
-#    print parse('((λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u))  (xz)')
-#    print parse('(λf.λz.(f (f z))) ((λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u)))')
-#    print parse('((λf.λz.(f (f z))) ((λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u))(λu.u))')
-#    print parse('(λf.(λx.(((λf.λz.(f (f z)))(λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u))(λu.u))))')
-#    print parse('(λy.(λf.(λx.((y(λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))(λu.u))(λu.u))))) (λf.λz.f (f z))')
-#    
-#    print parse('(λf.λz.f (f z))  (λg.(λh.(h(g(λg.(λh.(h(gf))))))))')
-#    print parse('(λf.λz.f (f z))  ((λg.(λh.(h(g(λg.(λh.(h(gf))))))))  (λu.(λu.x))   (λu.u))')
-#    print parse('(   (λf.λz.f (f z))  (λg.(λh.(h(g(λg.(λh.(h(gf))))))))  (λu.(λu.x))   (λu.u)   )      (λu.u)')
-#    print parse('λf.(     λx.(     (   (λf.λz.f (f z))  (λg.(λh.(h(g(λg.(λh.(h(gf))))))))  (λu.(λu.x))   (λu.u)   )      (λu.u)     )     )')
-#    
-#    func = parse_func('λg.(λh.(h(g(λg.(λh.(h(gf)))))))')
-#    print func.apply('z')
-    
-#    print parse('(λu.x)  (λu.(λu.x))  (λg.(λh.(h(gf))))')
-#    print parse('(λu.u) (λu.(λu.x)) (λg.(λh.(h(gf))))')
-#    
-#    # put one back
-#    print parse('( (λu.u) (λu.(λu.x)) (λg.(λh.(h(gf)))) )  (λu.(λu.x))  (λg.(λh.(h(gf))))')
-#    
-#    # remove another z = (λu.u)
-#    print parse('(λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x))      ((λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x)) z)')
-#    
-#    # put it back
-#    print parse('(λh.(h(λh.(h(λh.(h(λu.(λu.x))(λg.(λh.(h(gf))))))(λg.(λh.(h(gf))))))(λg.(λh.(h(gf))))))   (λu.u)')
-#    
-#    # use y = (λf.λz.f (f (f z))) and remove (λu.u)
-#    print parse('(λf.λz.f (f (f z)))  (λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x))  (λu.u)')
-#    print parse('(λf.λz.f(f(fz)))     (λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x))  (λu.u) (λu.u)')
-#    '(λx.((y(λg.(λh.(hg(λg.(λh.(h(gf)))))))(λu.(λu.x))(λu.u))(λu.u)))'
-#    
-#    # put it back
-#    print parse('( λy.( λf.( λx.( ( y (λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x))  (λu.u) )  (λu.u) ) ) ) ) (λf.λz.f (f (f z)))')
-#    
-#    # remove (λf.λz.f (f (f z)))
-#    print parse('(λf.λy.f (f y))     (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
-#    print parse('(λg.(λh.(h(gf)))) (λh.(h(λu.(λu.x))(λg.(λh.(h(gf)))))) (λg.(λh.(h(gf))))')
-#    print parse('(λg.(λh.(h(gf)))) (λh.(h(λu.(λu.x))(λg.(λh.(h(gf))))))')
-#    print parse('(λh.(h(f(λu.(λu.x))(λg.(λh.(h(gf)))))))')
-#    print parse('(λh.(h(f(λu.(λu.x))(λg.(λh.(h(gf)))))))  (λg.(λh.(h(gf))))')
-#    print parse('(λg.(λh.(h(gf)))) (λh.(h(λu.(λu.x))(λg.(λh.(h(gf)))))) (λg.(λh.(h(gf))))')
-#    print parse('(λg.(λh.(h(gf)))) f (λu.(λu.x)) (λg.(λh.(h(gf))))')
-#    print parse('(λh.(h  (λh.(h(λh.(h(λu.(λu.x))(λg.(λh.(h(gf))))))(λg.(λh.(h(gf))))))  (λg.(λh.(h(gf))))))')
-#    print parse('(λf.λz.f(f(fz))) (λg.(λh.(hg(λg.(λh.(h(gf))))))) (λu.(λu.x)) (λu.u) (λu.u)')
-#    '(λg.(λh.(h(gf)))) f (λu.(λu.x)) (λg.(λh.(h(gf))))'
-##############################################################################################################
-
-    # origin
-    print parse('(λf.λy.f (f y)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λz.f (f (f z)))')
-    
-    print '1 - 1 = 0:\t'
-    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f y) (λf.λz.f z)')
-#    print parse('(λi.λj.j (PRED) i) (λf.λy.f y) (λf.λz.f z)')
-#    print parse('(λf.λz.f z) (PRED)')
-#    print parse('(λf.λy.f y) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
-    
-    print 'SUB 3 2 = 1:\t',
-    print parse('(λi.λj.j (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
-#    print parse('(λf.λz.f (f z)) (λn.(λf.(λx.(n(λg.(λh.(h(gf))))(λu.x)(λu.u)))))')
-#    print parse('(  λf.(  λx.(     (λx.(z(λg.(λh.(h(g(λg.(λh.(h(gf))))(λu.x)(λu.u)))))(λu.x)(λu.u)))      )  )  )')
-#    print parse('(λn.(λf.(λx.(n(λg.(λh.(h(gf))))(λu.x)(λu.u))))) (λf.(λx.(z(λg.(λh.(h(gf))))(λu.x)(λu.u))))')
-#    print parse('(λf.λy.f (f (f y)))  (λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))')
-#    print parse('(λf.λy.f (f (f y)))  (λg.(λh.(h(g(λg.(λh.(h(gf))))))))(λu.(λu.x))  (λu.u)')
-#    print parse('( λz.( λf.( λx.( ( z (λg.(λh.(h(g(λg.(λh.(h(gf)))))))) (λu.(λu.x)) (λu.u) ) (λu.u) ) ) ) )   (λf.λy.f (f (f y)))')
-#    print
-#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
-#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λy.f (f (f y)))')
-#    print
-#    print parse('(λf.λz.f (f z)) (PRED)')
-#    print parse('(λi.λj.j (PRED) i) (λf.λy.f (f (f y))) (λf.λz.f (f z))')
-#    print parse('(λf.λz.f (f z)) (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
-#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))(λf.(λy.(f(f(fy)))))')
-#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) (λf.λx.z (λg.λh.h (g f)) (λu.x) (λu.u))')
-#    print parse('(λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u))')
-    
     print 'IF-THEN-ELSE TRUE (PRED (IF-THEN-ELSE FALSE M 2)) N = IF-THEN-ELSE TRUE (PRED 2) N = 1:\t',
-    print parse('(λa.λb.λc.abc) (λx.λy.x) ((λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) ((λa.λb.λc.abc) (λx.λy.y) M (λf.λx.f (f x)))) N ')
+    print parse('(λa.λb.λc.abc) (λx.λy.x) ((λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) ((λa.λb.λc.abc) (λx.λy.y) M (λf.λx.f (f x)))) N')
     
+    print 'Irregular:'
     print parse('(λx.(y(λx.(zx))))(a)')
     print parse('(λp.dλa.λb.p a b) (λx.λy.y) M N')
     print parse('(λp.p (λx.λy.y)) M N')
     
-#    print parse(sys.argv[1])
+    print 'FCTORIAL FOUR:\t',
+    print parse('(Y G) (λf.λx.(f (f (f (f x)))))', 1, main=True)
+##############################################################################################################
+
+#    if len(sys.argv) > 1:
+#        try:
+#            parsed = parse(sys.argv[1])
+#            print 'Result is: %s.' % parsed
+#        except:
+#            print 'Unable to parse [%s]: %s.' % (sys.argv[1], sys.exc_info()[1])
+#    else:
+#        print 'No argument was received.'
 
 
 
