@@ -186,6 +186,7 @@ def parse_func(term):
             sub, offset = read_token(sub)
             # since they are in parentheses, they are meant to be evaluated as long as possible
             sub = remove_par(sub)
+            sub = remove_par(parse(sub) if first else sub)
         elif not sub.startswith('λ'):   # single-word term (starts with neither '(' nor 'λ')
             sub, offset = sub[0], 1
         
