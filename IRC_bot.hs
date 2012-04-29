@@ -53,8 +53,8 @@ main = bracket connect disconnect loop
 --
 -- Interact with the server
 --
-activemsg :: Net ()
-activemsg = forever $ do
+activemsg :: Handle -> Net ()
+activemsg st = forever $ do
     io getLine >>= privmsg
   where
     forever a = a >> forever a
