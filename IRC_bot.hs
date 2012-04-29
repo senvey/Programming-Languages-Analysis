@@ -45,7 +45,7 @@ main :: IO ()
 main = bracket connect disconnect loop
   where
     disconnect = hClose . socket
-    loop st    = catch (do forkIO $ runReaderT run st; runReaderT activemsg st) (const $ return ())
+    loop st    = catch (do forkIO $ runReaderT activemsg st; runReaderT run st) (const $ return ())
       -- where
       --   parallel st = do
       --       forkIO runReaderT run st
@@ -54,8 +54,10 @@ main = bracket connect disconnect loop
 -- Interact with the server
 --
 activemsg :: Net ()
-activemsg = do
+activemsg = forever $ do
     io getLine >>= privmsg
+  where
+    forever a = a >> forever a
  
 --
 -- Connect to the server and return the initial bot state
@@ -93,7 +95,6 @@ run = do
 --
 listen :: Handle -> Net ()
 listen h = forever $ do
-    activemsg
     s <- init `fmap` io (hGetLine h)
     io (putStrLn s)
     if ping s then pong s else eval (clean s)
@@ -107,7 +108,7 @@ listen h = forever $ do
 -- Dispatch a command
 --
 eval :: String -> Net ()
-eval     "!uptime"             = uptime >>= privmsg
+eval     "!showtime"           = uptime >>= privmsg
 eval     "!quit"               = write "QUIT" ":Exiting" >> io (exitWith ExitSuccess)
 eval x | "!id " `isPrefixOf` x = privmsg (drop 4 x)
 eval     _                     = return () -- ignore everything else
