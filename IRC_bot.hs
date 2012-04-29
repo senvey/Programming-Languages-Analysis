@@ -108,7 +108,7 @@ listen h = forever $ do
 -- Dispatch a command
 --
 eval :: String -> Net ()
-eval     "!showtime"           = uptime >>= privmsg
+eval     "!livetime"           = uptime >>= privmsg
 eval     "!quit"               = write "QUIT" ":Exiting" >> io (exitWith ExitSuccess)
 eval x | "!id " `isPrefixOf` x = privmsg (drop 4 x)
 eval     _                     = return () -- ignore everything else
