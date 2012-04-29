@@ -45,19 +45,10 @@ main :: IO ()
 main = bracket connect disconnect loop
   where
     disconnect = hClose . socket
-    loop st    = catch (do forkIO $ runReaderT activemsg st; runReaderT run st) (const $ return ())
-      -- where
-      --   parallel st = do
-      --       forkIO runReaderT run st
-
---
--- Interact with the server
---
-activemsg :: Net ()
-activemsg = forever $ do
-    io getLine >>= privmsg
-  where
-    forever a = a >> forever a
+    loop st    = catch (do
+           forkIO $ runReaderT activemsg st
+           runReaderT run st)
+         (const $ return ())
  
 --
 -- Connect to the server and return the initial bot state
@@ -73,6 +64,15 @@ connect = notify $ do
         (printf "Connecting to %s ... " server >> hFlush stdout)
         (putStrLn "done.")
         a
+
+--
+-- Interact with the server
+--
+activemsg :: Net ()
+activemsg = forever $ do
+    io getLine >>= privmsg
+  where
+    forever a = a >> forever a
  
 --
 -- We're in the Net monad now, so we've connected successfully
@@ -109,7 +109,7 @@ listen h = forever $ do
 --
 eval :: String -> Net ()
 eval     "!livetime"           = uptime >>= privmsg
-eval     "!quit"               = write "QUIT" ":Exiting" >> io (exitWith ExitSuccess)
+eval     "!go"                 = write "QUIT" ":Exiting" >> io (exitWith ExitSuccess)
 eval x | "!id " `isPrefixOf` x = privmsg (drop 4 x)
 eval     _                     = return () -- ignore everything else
  
