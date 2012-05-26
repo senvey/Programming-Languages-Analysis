@@ -39,11 +39,11 @@ public class DynamicMenu {
 	}
 	
 	private static void pntClass(Class c) {
-    	System.out.print(" Interfaces:");
+    	pnt("Interfaces:");
 		for (Class i : c.getInterfaces()) {
 			pnt(i.getName());
 		}
-		System.out.print(" Super Classes:");
+		pnt("Super Classes:");
     	Class supc = c.getSuperclass();
     	if (supc != null)
 			pnt(supc.getName());
@@ -181,11 +181,11 @@ public class DynamicMenu {
 		URL path = DynamicMenu.class.getProtectionDomain().getCodeSource().getLocation();
         URLClassLoader loader = new URLClassLoader(new URL[] { path });
 //		String path = "file:///Volumes/Private/Development/Projects/Java/Reflection/INF212-Reflection.zip";
-//        URLClassLoader loader = new URLClassLoader(new URL[] { new URL(path) });
+//		URLClassLoader loader = new URLClassLoader(new URL[] { new URL(path) });
         
         System.out.print("Please enter a menu name to load [Menu1, Menu2]: ");
         String cName = System.console().readLine();
-//        String cName = "Menu2";
+//		String cName = "Menu2";
         try {
         	Class c = loader.loadClass(cName);
         	pntClass(c);
@@ -207,10 +207,10 @@ public class DynamicMenu {
 			System.err.println(String.format("*** ERROR: Failed to invoke methods in %s.", cName));
 			e.printStackTrace();
 		} catch (SecurityException e) {
-			// TODO Auto-generated catch block
+			System.err.println(String.format("*** ERROR: Cannot modify name for class %s.", cName));
 			e.printStackTrace();
 		} catch (NoSuchMethodException e) {
-			// TODO Auto-generated catch block
+			System.err.println(String.format("*** ERROR: Cannot modify name for class %s.", cName));
 			e.printStackTrace();
 		}
 	}
