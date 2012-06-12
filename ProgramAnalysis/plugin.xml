@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension
+         point="edu.cmu.cs.crystal.CrystalAnalysis">
+      <analysis
+            class="edu.uci.ics.VarReadAnalysis"
+            name="MyCrystalAnalysis">
+      </analysis>
+   </extension>
+
+</plugin>
