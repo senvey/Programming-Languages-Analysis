@@ -5,7 +5,11 @@
          point="edu.cmu.cs.crystal.CrystalAnalysis">
       <analysis
             class="edu.uci.ics.VarReadAnalysis"
-            name="MyCrystalAnalysis">
+            name="VarReadAnalysis">
+      </analysis>
+      <analysis
+            class="edu.uci.ics.BadPracticeAnalysis"
+            name="BadPracticeAnalysis">
       </analysis>
    </extension>
 
